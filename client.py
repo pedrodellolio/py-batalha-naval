@@ -5,6 +5,7 @@ import re
 from constants import MESSAGES
 
 eliminated = False
+matrices = {}
 players_eliminated = []
 initial_board = [[0, 0, 0, 0, 0],
                  [0, 0, 0, 0, 0],
@@ -66,6 +67,32 @@ def get_client_board_input():
     return new_board
 
 
+def process_turn(turn_result):
+    global matrices
+
+    for result in turn_result:
+        coordinates = result["coordinates"]
+        value = result["value"]
+        target = result["target"]
+
+        x, y = coordinates
+        matrices[target][x][y] = value
+
+    for port, matrix in matrices.items():
+        print(f"Port: {port}")
+        for row in matrix:
+            print(' '.join(cell if cell else '.' for cell in row))
+        print()  # Linha em branco para separar as matrizes
+
+
+def initialize_players_matrices(players):
+    global matrices
+
+    for player in players:
+        matrix = [['.' for _ in range(5)] for _ in range(5)]
+        matrices[player] = matrix
+
+
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 server_address = ('localhost', 12345)
@@ -87,17 +114,20 @@ try:
 
         if message == MESSAGES["no_players"]:
             break
-        if message == MESSAGES['game_starting']:
-            coord = parse_coordinates(
-                input('[CLIENT]: Escolha uma posição (x,y): '))
-            if coord:
-                client_socket.sendall(json.dumps(
-                    {'coordinates': coord}).encode())
-            else:
-                print(
-                    "[ATENÇÃO]: Formato inválido. Passe as coordenadas no formato (x,y)!")
         if isinstance(message, dict):
-            if boards := message.get("boards"):
+            if players := message.get("players"):  # MESSAGES['game_starting']:
+                initialize_players_matrices(players)
+                coord = parse_coordinates(
+                    input('[CLIENT]: Escolha uma posição (x,y): '))
+                if coord:
+                    client_socket.sendall(json.dumps(
+                        {'coordinates': coord}).encode())
+                else:
+                    print(
+                        "[ATENÇÃO]: Formato inválido. Passe as coordenadas no formato (x,y)!")
+
+            if turn := message.get("turn"):
+                process_turn(turn)
                 if eliminated_players := message.get("eliminated"):
                     new_eliminated = [
                         player for player in eliminated_players if player not in players_eliminated]
@@ -111,7 +141,8 @@ try:
                     {'coordinates': coord}).encode())
 
             if winner := message.get("winner"):
-                print(f"Fim de jogo!\nVencedor: {winner}")
+                print(f"""Fim de jogo!\nVencedor: {winner}\nJogador que mais afundou navios: {
+                      message.get("most_ships_sank")}""")
                 break
 finally:
     client_socket.close()
