@@ -1,198 +1,117 @@
 import socket
 import json
-from constants import MESSAGE_TYPE, SHIP_TYPE, X_AXIS, Y_AXIS
+import re
+
+from constants import MESSAGES
+
+eliminated = False
+players_eliminated = []
+initial_board = [[0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0],
+                 [0, 0, 0, 0, 0]]
 
 
-class Client:
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-        self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.player_address = None
-        self.matrices = {}  # visualização dos tabuleiros de todos os jogadores da partida
-        self.connected = False
-        self.has_lost = False
+def format_boards(response):
+    return
 
-    def connect(self):
-        self.client.connect((self.host, self.port))
-        self.connected = True
 
-    def receive_message(self):
-        return self.client.recv(1024).decode('utf-8')
+def is_valid_board(board_str):
+    try:
+        board = json.loads(board_str)
+        if not isinstance(board, list):
+            return False
+        for row in board:
+            if not isinstance(row, list):
+                return False
+            for value in row:
+                if not isinstance(value, (int, str)):
+                    return False
+        return True
+    except json.JSONDecodeError:
+        return False
 
-    def send_message(self, message):
-        self.client.sendall(message.encode('utf-8'))
 
-    def handle_response(self, response):
-        if isinstance(response, dict):
-            if address := response.get('address'):
-                self.player_address = address
-            if turn_result := response.get('turn_result'):
-                self.handle_turn_result(turn_result)
-        else:
-            print('[SERVIDOR]: ' + response)
-            self.handle_text_response(response)
+def parse_board(board_str):
+    if is_valid_board(board_str):
+        return json.loads(board_str)
+    return None
 
-    def handle_turn_result(self, turn_result):
-        self.build_matrices(turn_result)
-        formatted_result = self.format_results()
-        print(formatted_result)
-        self.send_message(MESSAGE_TYPE['turn_ready'])
 
-    def handle_text_response(self, response):
-        if response == MESSAGE_TYPE['leader']:
-            message = input(f'[{self.player_address[1]}]: ')
-            self.send_message(message)
-        elif response == MESSAGE_TYPE['ready']:
-            self.start_placing_ships()
-        elif response == MESSAGE_TYPE['player_turn']:
-            message = input(f'[{self.player_address[1]}]: ')
-            self.send_message(json.dumps({'coordinates': message}))
-        elif response == MESSAGE_TYPE['ready_ships']:
-            message = input(f'[{self.player_address[1]}]: ')
-            self.send_message(message)
-        elif response == MESSAGE_TYPE['player_lost']:
-            self.disconnect()
-        elif MESSAGE_TYPE['game_over'] in response:
-            print("Jogo terminado.")
-            return
-
-    def disconnect(self):
-        self.connected = False
-        self.client.close()
-
-    def start(self):
-        self.connect()
-        try:
-            while self.connected:
-                try:
-                    message = self.receive_message()
-
-                    try:
-                        response = json.loads(message)
-                    except json.JSONDecodeError:
-                        response = message
-
-                    if not response:
-                        break
-                    if not self.has_lost:
-                        self.handle_response(response)
-                except ConnectionResetError:
-                    break
-        finally:
-            self.disconnect()
-
-    def format_results(self):
-        '''
-        Formata as matrizes para mostrar no terminal para os jogadores
-        '''
-        headers = []
-        formatted_boards = []
-        max_rows = max(len(matrix) for matrix in self.matrices.values())
-
-        # Adiciona os headers com os endereços centralizados
-        for address, matrix in self.matrices.items():
-            client_addr = str(self.player_address[1])
-            if address == client_addr:
-                headers.append(str('Você').center(len(matrix[0]) * 2 - 1))
-            else:
-                headers.append(str(address).center(len(matrix[0]) * 2 - 1))
-
-        formatted_boards.append(' | '.join(headers))
-
-        # Formata cada linha das matrizes
-        for row in range(max_rows):
-            row_parts = []
-            for address, matrix in self.matrices.items():
-                if row < len(matrix):
-                    row_parts.append(' '.join(matrix[row]))
-                else:
-                    row_parts.append(' ' * (len(matrix[0]) * 2 - 1))
-            formatted_boards.append(' | '.join(row_parts))
-
-        return '\n'.join(formatted_boards)
-
-    def update_ship_matrix(self, matrix, coordinates):
-        for x, y in coordinates:
-            matrix[x][y] = '*'
-
-    def parse_ship_coordinates(self, response):
-        positions = []
-        for position in response.split(')('):
-            coordinates = self.parse_coordinates(position)
-            positions.append(coordinates)
-        return positions
-
-    def request_ship_position(self, ship_type, ship_number):
-        print(f'Selecione a posicao do {ship_type} {
-            ship_number} (ex: (linha,col)(linha,col)):\n')
-        message = input()
-        coordinates = self.parse_ship_coordinates(message)
-        return coordinates
-
-    def parse_coordinates(self, response):
-        coord = response.replace('(', '').replace(')', '')
-        x, y = coord.split(',')
+def parse_coordinates(coord_str):
+    pattern = r"\(\d+,\d+\)"
+    if re.match(pattern, coord_str):
+        x, y = map(int, coord_str.strip("()").split(","))
         return (int(x), int(y))
+    return None
 
-    def handle_ship_placement(self, matrix):
-        for ship, quantity in SHIP_TYPE.items():
-            for i in range(quantity):
-                coords = self.request_ship_position(ship, i+1)
-                self.update_ship_matrix(matrix, coords)
-                print(self.format_ship_matrix(matrix))
 
-        self.matrices[str(self.player_address[1])] = matrix
-        self.client.sendall(json.dumps({'matrix': matrix}).encode())
+def get_client_board_input():
+    print("Monte seu tabuleiro:")
+    for row in initial_board:
+        print(row)
 
-    def initialize_ship_matrix(self):
-        return [['_' for _ in range(X_AXIS)] for _ in range(Y_AXIS)]
+    # Permite ao jogador alterar os valores da matriz
+    new_board = []
+    for i, row in enumerate(initial_board):
+        new_row = input(
+            f"Digite os valores para a linha {i+1} separados por vírgula (1 - barco; 0 - água): ").split(",")
+        new_board.append([int(value.strip()) if value.strip(
+        ).isdigit() else value.strip() for value in new_row])
 
-    def format_ship_matrix(self, matrix):
-        return '\n'.join([' '.join(row) for row in matrix]) + '\n'
+    print("Tabuleiro final:")
+    for row in new_board:
+        print(row)
+    return new_board
 
-    def start_placing_ships(self):
-        matrix = self.initialize_ship_matrix()
-        formatted_matrix = self.format_ship_matrix(matrix)
-        print(formatted_matrix)
-        self.handle_ship_placement(matrix)
 
-    def parse_ship_positions(self, response):
-        positions = []
-        for position in response.split(')('):
-            position = position.replace('(', '').replace(')', '')
-            x, y = position.split(',')
-            positions.append((int(x), int(y)))
-        return positions
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    def build_matrices(self, result):
-        addresses = []
-        for shot in result:
-            addresses.append(shot['from'])
+server_address = ('localhost', 12345)
+print('Conectando a {} na porta {}'.format(*server_address))
+client_socket.connect(server_address)
 
-        for shot in result:
-            x = shot['x']
-            y = shot['y']
-            who_shot = shot['from']
-            target = shot['to']
-            value = shot['value']
+try:
+    board = get_client_board_input()
+    client_socket.sendall(json.dumps({'matrix': board}).encode())
+    while not eliminated:
+        response = client_socket.recv(4096).decode()
 
-            if self.matrices.get(target):
-                self.matrices[target][x][y] = value
+        try:
+            message = json.loads(response)
+        except json.JSONDecodeError:
+            message = response
+
+        print('[SERVIDOR]:', message)
+
+        if message == MESSAGES["no_players"]:
+            break
+        if message == MESSAGES['game_starting']:
+            coord = parse_coordinates(
+                input('[CLIENT]: Escolha uma posição (x,y): '))
+            if coord:
+                client_socket.sendall(json.dumps(
+                    {'coordinates': coord}).encode())
             else:
-                matrix = self.initialize_ship_matrix()
-                matrix[x][y] = value
-                self.matrices[target] = matrix
+                print(
+                    "[ATENÇÃO]: Formato inválido. Passe as coordenadas no formato (x,y)!")
+        if isinstance(message, dict):
+            if boards := message.get("boards"):
+                if eliminated_players := message.get("eliminated"):
+                    new_eliminated = [
+                        player for player in eliminated_players if player not in players_eliminated]
+                    players_eliminated.extend(new_eliminated)
+                    if new_eliminated:
+                        print("Os jogadores", new_eliminated,
+                              "foram eliminados.")
+                coord = parse_coordinates(
+                    input('[CLIENT]: Escolha uma posição (x,y): '))
+                client_socket.sendall(json.dumps(
+                    {'coordinates': coord}).encode())
 
-
-            # for addr in addresses:
-            #     if (who_shot != addr):
-            #         if self.matrices.get(addr):
-            #             self.matrices[addr][x][y] = value
-            #         else:
-            #             matrix = self.initialize_ship_matrix()
-            #             matrix[x][y] = value
-            #             self.matrices[addr] = matrix
-if __name__ == '__main__':
-    client = Client('localhost', 12345)
-    client.start()
+            if winner := message.get("winner"):
+                print(f"Fim de jogo!\nVencedor: {winner}")
+                break
+finally:
+    client_socket.close()
